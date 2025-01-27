@@ -39,6 +39,7 @@ pub mod toolchain_info {
 mod build_dependencies;
 mod cargo_workspace;
 mod env;
+mod ignore_file;
 mod manifest_path;
 mod sysroot;
 mod workspace;

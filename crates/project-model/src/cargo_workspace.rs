@@ -5,7 +5,7 @@ use std::str::from_utf8;
 
 use anyhow::Context;
 use base_db::Env;
-use cargo_metadata::{CargoOpt, MetadataCommand};
+use cargo_metadata::{CargoOpt, MetadataCommand, PackageId};
 use la_arena::{Arena, Idx};
 use paths::{AbsPath, AbsPathBuf, Utf8PathBuf};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -14,6 +14,7 @@ use serde_json::from_value;
 use span::Edition;
 use toolchain::Tool;
 
+use crate::ignore_file::IgnoredCrateMatcher;
 use crate::{CfgOverrides, InvocationStrategy};
 use crate::{ManifestPath, Sysroot};
 
@@ -411,6 +412,65 @@ impl CargoWorkspace {
         let mut is_virtual_workspace = true;
 
         meta.packages.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let ignorer = IgnoredCrateMatcher::new(workspace_root.clone()).unwrap();
+        eprintln!("{ignorer:?}");
+        eprintln!("ws members: {}", ws_members.len());
+        let ws_members_to_keep = meta
+            .packages
+            .iter()
+            .filter_map(|pkg| {
+                if ws_members.contains(&pkg.id) && !ignorer.is_match(&pkg.manifest_path) {
+                    Some(pkg.id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        eprintln!("ws members kept: {}", ws_members_to_keep.len());
+        let dep_tree = meta
+            .resolve
+            .clone()
+            .map(|it| {
+                it.nodes.into_iter().fold(FxHashMap::default(), |mut acc, node| {
+                    acc.insert(node.id, node.dependencies);
+                    acc
+                })
+            })
+            .unwrap_or_default();
+
+        fn get_dependencies(
+            tree: &FxHashMap<PackageId, Vec<PackageId>>,
+            source: &PackageId,
+        ) -> FxHashSet<PackageId> {
+            let mut set = FxHashSet::default();
+            // TODO under what circumstaces is this option none?
+            let Some(direct_deps) = tree.get(source).cloned() else {
+                return FxHashSet::default();
+            };
+
+            for dep in &direct_deps {
+                set.extend(get_dependencies(tree, dep));
+            }
+
+            set.extend(direct_deps);
+
+            set
+        }
+
+        // TODO:
+        // - Remove other ignored_crates stuff
+        // - Is there a more optimal algorithm for this mess
+        // - Other TODOs
+
+        // This variable contains all of workspace members that haven't been ignored and all of the
+        // dependencies of those workspace members
+        let mut packages_to_keep: FxHashSet<PackageId> = ws_members_to_keep
+            .iter()
+            .flat_map(|member| get_dependencies(&dep_tree, member))
+            .collect::<FxHashSet<_>>();
+        packages_to_keep.extend(ws_members_to_keep);
+
         for meta_pkg in meta.packages {
             let cargo_metadata::Package {
                 name,
@@ -432,6 +492,11 @@ impl CargoWorkspace {
                 rust_version,
                 ..
             } = meta_pkg;
+
+            if !packages_to_keep.contains(&id) {
+                continue;
+            }
+
             let meta = from_value::<PackageMetadata>(metadata).unwrap_or_default();
             let edition = match edition {
                 cargo_metadata::Edition::E2015 => Edition::Edition2015,
@@ -499,6 +564,10 @@ impl CargoWorkspace {
             }
         }
         for mut node in meta.resolve.map_or_else(Vec::new, |it| it.nodes) {
+            if !packages_to_keep.contains(&node.id) {
+                continue;
+            }
+
             let &source = pkg_by_id.get(&node.id).unwrap();
             node.deps.sort_by(|a, b| a.pkg.cmp(&b.pkg));
             let dependencies = node
