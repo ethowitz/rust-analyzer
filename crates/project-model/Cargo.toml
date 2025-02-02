@@ -15,6 +15,7 @@ doctest = false
 [dependencies]
 anyhow.workspace = true
 cargo_metadata.workspace = true
+cargo-filtered.workspace = true
 rustc-hash.workspace = true
 semver.workspace = true
 serde_json.workspace = true
