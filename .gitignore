@@ -13,3 +13,4 @@ generated_diagnostic.adoc
 /out/
 /dump.lsif
 .envrc
+.ra-allowlist

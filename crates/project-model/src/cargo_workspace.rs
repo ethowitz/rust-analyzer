@@ -404,6 +404,7 @@ impl CargoWorkspace {
         let mut packages = Arena::default();
         let mut targets = Arena::default();
 
+        let packages_to_keep = cargo_filtered::filtered_packages(meta.clone());
         let ws_members = &meta.workspace_members;
 
         let workspace_root = AbsPathBuf::assert(meta.workspace_root);
@@ -411,6 +412,7 @@ impl CargoWorkspace {
         let mut is_virtual_workspace = true;
 
         meta.packages.sort_by(|a, b| a.id.cmp(&b.id));
+
         for meta_pkg in meta.packages {
             let cargo_metadata::Package {
                 name,
@@ -432,6 +434,11 @@ impl CargoWorkspace {
                 rust_version,
                 ..
             } = meta_pkg;
+
+            if !packages_to_keep.contains(&id) {
+                continue;
+            }
+
             let meta = from_value::<PackageMetadata>(metadata).unwrap_or_default();
             let edition = match edition {
                 cargo_metadata::Edition::E2015 => Edition::Edition2015,
@@ -499,6 +506,10 @@ impl CargoWorkspace {
             }
         }
         for mut node in meta.resolve.map_or_else(Vec::new, |it| it.nodes) {
+            if !packages_to_keep.contains(&node.id) {
+                continue;
+            }
+
             let &source = pkg_by_id.get(&node.id).unwrap();
             node.deps.sort_by(|a, b| a.pkg.cmp(&b.pkg));
             let dependencies = node
